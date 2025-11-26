@@ -27,6 +27,27 @@ IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 
 
+def get_available_classnames(source: str):
+    """Return class names that exist at the given MVTec source path."""
+
+    if not os.path.isdir(source):
+        raise ValueError(f"MVTec source path does not exist: {source}")
+
+    available = []
+    for entry in sorted(os.listdir(source)):
+        class_dir = os.path.join(source, entry)
+        if not os.path.isdir(class_dir):
+            continue
+
+        # Require both train and test folders to consider a class usable
+        if os.path.isdir(os.path.join(class_dir, "train")) and os.path.isdir(
+            os.path.join(class_dir, "test")
+        ):
+            available.append(entry)
+
+    return available or _CLASSNAMES
+
+
 class DatasetSplit(Enum):
     TRAIN = "train"
     VAL = "val"
@@ -75,7 +96,17 @@ class MVTecDataset(torch.utils.data.Dataset):
         super().__init__()
         self.source = source
         self.split = split
-        self.classnames_to_use = [classname] if classname is not None else _CLASSNAMES
+        self.available_classnames = get_available_classnames(source)
+
+        if classname is None:
+            self.classnames_to_use = self.available_classnames
+        else:
+            if classname not in self.available_classnames:
+                raise ValueError(
+                    f"Class '{classname}' not found in '{source}'. "
+                    f"Available classes: {', '.join(self.available_classnames)}"
+                )
+            self.classnames_to_use = [classname]
         self.train_val_split = train_val_split
         self.transform_std = IMAGENET_STD
         self.transform_mean = IMAGENET_MEAN

@@ -93,11 +93,15 @@ def run(
 
             SimpleNet.set_model_dir(os.path.join(models_dir, f"{i}"), dataset_name)
             if not test:
-                i_auroc, p_auroc, pro_auroc = SimpleNet.train(dataloaders["training"], dataloaders["testing"])
+                i_auroc, p_auroc, pro_auroc, inference_time = SimpleNet.train(
+                    dataloaders["training"], dataloaders["testing"]
+                )
             else:
-                # BUG: the following line is not using. Set test with True by default.
-                # i_auroc, p_auroc, pro_auroc =  SimpleNet.test(dataloaders["training"], dataloaders["testing"], save_segmentation_images)
-                print("Warning: Pls set test with true by default")
+                i_auroc, p_auroc, pro_auroc, inference_time = SimpleNet.test(
+                    dataloaders["training"],
+                    dataloaders["testing"],
+                    save_segmentation_images,
+                )
 
             result_collect.append(
                 {
@@ -105,6 +109,7 @@ def run(
                     "instance_auroc": i_auroc, # auroc,
                     "full_pixel_auroc": p_auroc, # full_pixel_auroc,
                     "anomaly_pixel_auroc": pro_auroc,
+                    "inference_time": inference_time,
                 }
             )
 
@@ -226,7 +231,7 @@ def net(
 @main.command("dataset")
 @click.argument("name", type=str)
 @click.argument("data_path", type=click.Path(exists=True, file_okay=False))
-@click.option("--subdatasets", "-d", multiple=True, type=str, required=True)
+@click.option("--subdatasets", "-d", multiple=True, type=str, required=False, default=None)
 @click.option("--train_val_split", type=float, default=1, show_default=True)
 @click.option("--batch_size", default=2, type=int, show_default=True)
 @click.option("--num_workers", default=2, type=int, show_default=True)
@@ -263,7 +268,22 @@ def dataset(
     augment,
 ):
     dataset_info = _DATASETS[name]
-    dataset_library = __import__(dataset_info[0], fromlist=[dataset_info[1]])
+    dataset_library = __import__(dataset_info[0], fromlist=[dataset_info[1], "get_available_classnames"])
+
+    available_classnames = dataset_library.get_available_classnames(data_path)
+    if not subdatasets:
+        subdatasets = available_classnames
+        LOGGER.info(
+            "No subdatasets provided; using all available classes: %s",
+            ", ".join(subdatasets),
+        )
+    else:
+        missing_classes = set(subdatasets) - set(available_classnames)
+        if missing_classes:
+            raise ValueError(
+                f"Classes {', '.join(sorted(missing_classes))} not found in {data_path}. "
+                f"Available classes: {', '.join(available_classnames)}"
+            )
 
     def get_dataloaders(seed):
         dataloaders = []

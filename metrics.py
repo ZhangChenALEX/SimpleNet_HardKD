@@ -87,8 +87,8 @@ import pandas as pd
 from skimage import measure
 def compute_pro(masks, amaps, num_th=200):
 
-    df = pd.DataFrame([], columns=["pro", "fpr", "threshold"])
-    binary_amaps = np.zeros_like(amaps, dtype=np.bool)
+    records = []
+    binary_amaps = np.zeros_like(amaps, dtype=np.bool_)
 
     min_th = amaps.min()
     max_th = amaps.max()
@@ -112,11 +112,21 @@ def compute_pro(masks, amaps, num_th=200):
         fp_pixels = np.logical_and(inverse_masks, binary_amaps).sum()
         fpr = fp_pixels / inverse_masks.sum()
 
-        df = df.append({"pro": np.mean(pros), "fpr": fpr, "threshold": th}, ignore_index=True)
+        records.append({"pro": np.mean(pros), "fpr": fpr, "threshold": th})
+
+    if not records:
+        return 0.0
+
+    df = pd.DataFrame(records)
 
     # Normalize FPR from 0 ~ 1 to 0 ~ 0.3
     df = df[df["fpr"] < 0.3]
-    df["fpr"] = df["fpr"] / df["fpr"].max()
+    if df.empty:
+        return 0.0
+
+    max_fpr = df["fpr"].max()
+    if max_fpr > 0:
+        df["fpr"] = df["fpr"] / max_fpr
 
     pro_auc = metrics.auc(df["fpr"], df["pro"])
     return pro_auc

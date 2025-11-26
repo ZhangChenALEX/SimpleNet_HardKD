@@ -15,6 +15,7 @@ import math
 import numpy as np
 import torch
 import torch.nn.functional as F
+import time
 import tqdm
 from torch.utils.tensorboard import SummaryWriter
 
@@ -32,25 +33,43 @@ def init_weight(m):
         torch.nn.init.xavier_normal_(m.weight)
 
 
+class ResidualBlock(torch.nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.block = torch.nn.Sequential(
+            torch.nn.Linear(dim, dim),
+            torch.nn.BatchNorm1d(dim),
+            torch.nn.LeakyReLU(0.2),
+            torch.nn.Dropout(0.2),
+        )
+        self.block.apply(init_weight)
+
+    def forward(self, x):
+        return x + self.block(x)
+
+
 class Discriminator(torch.nn.Module):
     def __init__(self, in_planes, n_layers=1, hidden=None):
         super(Discriminator, self).__init__()
 
         _hidden = in_planes if hidden is None else hidden
-        self.body = torch.nn.Sequential()
-        for i in range(n_layers-1):
-            _in = in_planes if i == 0 else _hidden
-            _hidden = int(_hidden // 1.5) if hidden is None else hidden
-            self.body.add_module('block%d'%(i+1),
-                                 torch.nn.Sequential(
-                                     torch.nn.Linear(_in, _hidden),
-                                     torch.nn.BatchNorm1d(_hidden),
-                                     torch.nn.LeakyReLU(0.2)
-                                 ))
+        modules = [
+            torch.nn.Linear(in_planes, _hidden),
+            torch.nn.BatchNorm1d(_hidden),
+            torch.nn.LeakyReLU(0.2),
+            torch.nn.Dropout(0.2),
+            ResidualBlock(_hidden),
+        ]
+
+        # If more layers are requested, stack additional residual blocks.
+        for _ in range(max(n_layers - 1, 0)):
+            modules.append(ResidualBlock(_hidden))
+
+        self.body = torch.nn.Sequential(*modules)
         self.tail = torch.nn.Linear(_hidden, 1, bias=False)
         self.apply(init_weight)
 
-    def forward(self,x):
+    def forward(self, x):
         x = self.body(x)
         x = self.tail(x)
         return x
@@ -296,31 +315,14 @@ class SimpleNet(torch.nn.Module):
             if "pretrained_dec" in state_dicts:
                 self.feature_dec.load_state_dict(state_dicts["pretrained_dec"])
 
-        aggregator = {"scores": [], "segmentations": [], "features": []}
-        scores, segmentations, features, labels_gt, masks_gt = self.predict(test_data)
-        aggregator["scores"].append(scores)
-        aggregator["segmentations"].append(segmentations)
-        aggregator["features"].append(features)
-
-        scores = np.array(aggregator["scores"])
-        min_scores = scores.min(axis=-1).reshape(-1, 1)
-        max_scores = scores.max(axis=-1).reshape(-1, 1)
-        scores = (scores - min_scores) / (max_scores - min_scores)
-        scores = np.mean(scores, axis=0)
-
-        segmentations = np.array(aggregator["segmentations"])
-        min_scores = (
-            segmentations.reshape(len(segmentations), -1)
-            .min(axis=-1)
-            .reshape(-1, 1, 1, 1)
-        )
-        max_scores = (
-            segmentations.reshape(len(segmentations), -1)
-            .max(axis=-1)
-            .reshape(-1, 1, 1, 1)
-        )
-        segmentations = (segmentations - min_scores) / (max_scores - min_scores)
-        segmentations = np.mean(segmentations, axis=0)
+        (
+            scores,
+            segmentations,
+            features,
+            _labels_gt,
+            masks_gt,
+            inference_time,
+        ) = self.predict(test_data)
 
         anomaly_labels = [
             x[1] != "good" for x in test_data.dataset.data_to_iterate
@@ -328,20 +330,24 @@ class SimpleNet(torch.nn.Module):
 
         if save_segmentation_images:
             self.save_segmentation_images(test_data, segmentations, scores)
-            
-        auroc = metrics.compute_imagewise_retrieval_metrics(
-            scores, anomaly_labels
-        )["auroc"]
 
-        # Compute PRO score & PW Auroc for all images
-        pixel_scores = metrics.compute_pixelwise_retrieval_metrics(
-            segmentations, masks_gt
+        auroc, full_pixel_auroc, pro, inference_time = self._evaluate(
+            test_data,
+            scores,
+            segmentations,
+            features,
+            anomaly_labels,
+            masks_gt,
+            inference_time,
         )
-        full_pixel_auroc = pixel_scores["auroc"]
 
-        return auroc, full_pixel_auroc
-    
-    def _evaluate(self, test_data, scores, segmentations, features, labels_gt, masks_gt):
+        LOGGER.info(
+            f"Average inference time per image: {inference_time:.6f} seconds"
+        )
+
+        return auroc, full_pixel_auroc, pro, inference_time
+
+    def _evaluate(self, test_data, scores, segmentations, features, labels_gt, masks_gt, inference_time=None):
         
         scores = np.squeeze(np.array(scores))
         img_min_scores = scores.min(axis=-1)
@@ -383,7 +389,7 @@ class SimpleNet(torch.nn.Module):
             full_pixel_auroc = -1 
             pro = -1
 
-        return auroc, full_pixel_auroc, pro
+        return auroc, full_pixel_auroc, pro, inference_time
         
     
     def train(self, training_data, test_data):
@@ -401,10 +407,14 @@ class SimpleNet(torch.nn.Module):
                 self.load_state_dict(state_dict, strict=False)
 
             self.predict(training_data, "train_")
-            scores, segmentations, features, labels_gt, masks_gt = self.predict(test_data)
-            auroc, full_pixel_auroc, anomaly_pixel_auroc = self._evaluate(test_data, scores, segmentations, features, labels_gt, masks_gt)
-            
-            return auroc, full_pixel_auroc, anomaly_pixel_auroc
+            scores, segmentations, features, labels_gt, masks_gt, inference_time = self.predict(test_data)
+            auroc, full_pixel_auroc, anomaly_pixel_auroc, inference_time = self._evaluate(
+                test_data, scores, segmentations, features, labels_gt, masks_gt, inference_time
+            )
+
+            LOGGER.info(f"Average inference time per image: {inference_time:.6f} seconds")
+
+            return auroc, full_pixel_auroc, anomaly_pixel_auroc, inference_time
         
         def update_state_dict(d):
             
@@ -422,30 +432,34 @@ class SimpleNet(torch.nn.Module):
             self._train_discriminator(training_data)
 
             # torch.cuda.empty_cache()
-            scores, segmentations, features, labels_gt, masks_gt = self.predict(test_data)
-            auroc, full_pixel_auroc, pro = self._evaluate(test_data, scores, segmentations, features, labels_gt, masks_gt)
+            scores, segmentations, features, labels_gt, masks_gt, inference_time = self.predict(test_data)
+            auroc, full_pixel_auroc, pro, inference_time = self._evaluate(
+                test_data, scores, segmentations, features, labels_gt, masks_gt, inference_time
+            )
             self.logger.logger.add_scalar("i-auroc", auroc, i_mepoch)
             self.logger.logger.add_scalar("p-auroc", full_pixel_auroc, i_mepoch)
             self.logger.logger.add_scalar("pro", pro, i_mepoch)
 
             if best_record is None:
-                best_record = [auroc, full_pixel_auroc, pro]
+                best_record = [auroc, full_pixel_auroc, pro, inference_time]
                 update_state_dict(state_dict)
                 # state_dict = OrderedDict({k:v.detach().cpu() for k, v in self.state_dict().items()})
             else:
                 if auroc > best_record[0]:
-                    best_record = [auroc, full_pixel_auroc, pro]
+                    best_record = [auroc, full_pixel_auroc, pro, inference_time]
                     update_state_dict(state_dict)
                     # state_dict = OrderedDict({k:v.detach().cpu() for k, v in self.state_dict().items()})
                 elif auroc == best_record[0] and full_pixel_auroc > best_record[1]:
                     best_record[1] = full_pixel_auroc
-                    best_record[2] = pro 
+                    best_record[2] = pro
+                    best_record[3] = inference_time
                     update_state_dict(state_dict)
                     # state_dict = OrderedDict({k:v.detach().cpu() for k, v in self.state_dict().items()})
 
             print(f"----- {i_mepoch} I-AUROC:{round(auroc, 4)}(MAX:{round(best_record[0], 4)})"
                   f"  P-AUROC{round(full_pixel_auroc, 4)}(MAX:{round(best_record[1], 4)}) -----"
-                  f"  PRO-AUROC{round(pro, 4)}(MAX:{round(best_record[2], 4)}) -----")
+                  f"  PRO-AUROC{round(pro, 4)}(MAX:{round(best_record[2], 4)}) -----"
+                  f"  INF-TIME:{round(inference_time, 6)}(BEST:{round(best_record[3], 6)}) -----")
         
         torch.save(state_dict, ckpt_path)
         
@@ -559,6 +573,8 @@ class SimpleNet(torch.nn.Module):
         from sklearn.manifold import TSNE
 
         with tqdm.tqdm(dataloader, desc="Inferring...", leave=False) as data_iterator:
+            start_time = time.perf_counter()
+            total_images = 0
             for data in data_iterator:
                 if isinstance(data, dict):
                     labels_gt.extend(data["is_anomaly"].numpy().tolist())
@@ -570,8 +586,12 @@ class SimpleNet(torch.nn.Module):
                 for score, mask, feat, is_anomaly in zip(_scores, _masks, _feats, data["is_anomaly"].numpy().tolist()):
                     scores.append(score)
                     masks.append(mask)
+                total_images += image.shape[0]
 
-        return scores, masks, features, labels_gt, masks_gt
+        inference_time = time.perf_counter() - start_time
+        avg_inference_time = inference_time / max(total_images, 1)
+
+        return scores, masks, features, labels_gt, masks_gt, avg_inference_time
 
     def _predict(self, images):
         """Infer score and mask for a batch of images."""

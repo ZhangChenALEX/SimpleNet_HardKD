@@ -1,58 +1,62 @@
 # SimpleNet
 
-
-![](imgs/cover.png)
+![Cover image](imgs/cover.png)
 
 **SimpleNet: A Simple Network for Image Anomaly Detection and Localization**
 
-*Zhikang Liu, Yiming Zhou, Yuansheng Xu, Zilei Wang**
+Zhikang Liu, Yiming Zhou, Yuansheng Xu, Zilei Wang
 
 [Paper link](https://openaccess.thecvf.com/content/CVPR2023/papers/Liu_SimpleNet_A_Simple_Network_for_Image_Anomaly_Detection_and_Localization_CVPR_2023_paper.pdf)
 
-##  Introduction
+## Introduction
+This repository contains a PyTorch reimplementation of **SimpleNet**, a defect detection and localization network composed of a feature encoder, feature generator, and defect discriminator. The goal is to keep the architecture and training recipe simple while delivering strong anomaly detection and segmentation performance.
 
-This repo contains source code for **SimpleNet** implemented with pytorch.
+## Environment
+- Python **3.8** (other versions may work)
+- PyTorch **1.12.1**
+- TorchVision **0.13.1**
+- NumPy **1.22.4**
+- OpenCV-Python **4.5.1**
 
-SimpleNet is a simple defect detection and localization network that built with a feature encoder, feature generator and defect discriminator. It is designed conceptionally simple without complex network deisng, training schemes or external data source.
+Install the requirements with your preferred environment manager (e.g., `conda`, `pip`).
 
-## Get Started 
+## Dataset
+- Default target: **MvTecAD**. Download from the [official site](https://www.mvtec.com/company/research/datasets/mvtec-ad/).
+- Expected layout: keep the original folder structure. By default `run.sh` assumes the dataset sits next to this repo in a sibling folder named `mvtec` (i.e., `../mvtec`).
+- To use a different location or subset of classes, edit `datapath` or `classes` in `run.sh`, or pass the corresponding CLI flags to `main.py`.
 
-### Environment 
+## How to Run
+The project ships with a convenience script that trains and then tests in one go.
 
-**Python3.8**
-
-**Packages**:
-- torch==1.12.1
-- torchvision==0.13.1
-- numpy==1.22.4
-- opencv-python==4.5.1
-
-(Above environment setups are not the minimum requiremetns, other versions might work too.)
-
-
-### Data
-
-Edit `run.sh` to edit dataset class and dataset path.
-
-#### MvTecAD
-
-Download the dataset from [here](https://www.mvtec.com/company/research/datasets/mvtec-ad/).
-
-The dataset folders/files follow its original structure.
-
-### Run
-
-#### Demo train
-
-Please specicy dataset path (line1) and log folder (line10) in `run.sh` before running.
-
-`run.sh` gives the configuration to train models on MVTecAD dataset.
-```
+```bash
 bash run.sh
 ```
 
-## Citation
+Key arguments inside `run.sh` (feel free to tweak):
+- `datapath`: dataset root (defaults to `../mvtec`).
+- `log_project`, `log_group`, `run_name`, `results_dir`: control where logs and metrics are stored.
+- `meta_epochs`: number of training epochs (set to 40 by default).
+- `--save_segmentation_images`: enabled so heatmaps/masks are exported during testing.
+
+You can also invoke the CLI directly for custom runs, e.g.:
+```bash
+python3 main.py --dataset mvtec --datapath ../mvtec --meta_epochs 40
+python3 main.py --dataset mvtec --datapath ../mvtec --test --save_segmentation_images
 ```
+
+## End-to-End Workflow (English)
+1. **Prepare data**: place the MvTecAD dataset at `../mvtec` or point `datapath` elsewhere.
+2. **Configure run**: adjust `run.sh` variables (paths, epochs, class list) or supply equivalent CLI flags.
+3. **Train**: `SimpleNet.train` iterates over `meta_epochs`, training the discriminator and evaluating on the test split each round.
+4. **Test & visualize**: `SimpleNet.test` runs inference, measures per-image inference time, and optionally saves heatmaps/masks via `--save_segmentation_images`.
+5. **Collect results**: metrics (image-level AUROC, pixel-level AUROC, AUPRO, average inference time in seconds per image) are aggregated into a CSV; visual outputs are written to disk.
+
+## Where to Find Outputs
+- **Metrics CSV**: `results/<log_project>/<log_group>/<run_name>/results.csv` (adjustable via `run.sh`). The last row contains the mean over all evaluated classes.
+- **Heatmaps & masks**: saved under `output/` in the repository root when `--save_segmentation_images` is enabled.
+
+## Citation
+```bibtex
 @inproceedings{liu2023simplenet,
   title={SimpleNet: A Simple Network for Image Anomaly Detection and Localization},
   author={Liu, Zhikang and Zhou, Yiming and Xu, Yuansheng and Wang, Zilei},
@@ -63,9 +67,7 @@ bash run.sh
 ```
 
 ## Acknowledgement
-
-Thanks for great inspiration from [PatchCore](https://github.com/amazon-science/patchcore-inspection)
+Thanks for great inspiration from [PatchCore](https://github.com/amazon-science/patchcore-inspection).
 
 ## License
-
-All code within the repo is under [MIT license](https://mit-license.org/)
+All code within the repo is under the [MIT license](https://mit-license.org/).
