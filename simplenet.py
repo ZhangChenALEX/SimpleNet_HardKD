@@ -33,25 +33,43 @@ def init_weight(m):
         torch.nn.init.xavier_normal_(m.weight)
 
 
+class ResidualBlock(torch.nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.block = torch.nn.Sequential(
+            torch.nn.Linear(dim, dim),
+            torch.nn.BatchNorm1d(dim),
+            torch.nn.LeakyReLU(0.2),
+            torch.nn.Dropout(0.2),
+        )
+        self.block.apply(init_weight)
+
+    def forward(self, x):
+        return x + self.block(x)
+
+
 class Discriminator(torch.nn.Module):
     def __init__(self, in_planes, n_layers=1, hidden=None):
         super(Discriminator, self).__init__()
 
         _hidden = in_planes if hidden is None else hidden
-        self.body = torch.nn.Sequential()
-        for i in range(n_layers-1):
-            _in = in_planes if i == 0 else _hidden
-            _hidden = int(_hidden // 1.5) if hidden is None else hidden
-            self.body.add_module('block%d'%(i+1),
-                                 torch.nn.Sequential(
-                                     torch.nn.Linear(_in, _hidden),
-                                     torch.nn.BatchNorm1d(_hidden),
-                                     torch.nn.LeakyReLU(0.2)
-                                 ))
+        modules = [
+            torch.nn.Linear(in_planes, _hidden),
+            torch.nn.BatchNorm1d(_hidden),
+            torch.nn.LeakyReLU(0.2),
+            torch.nn.Dropout(0.2),
+            ResidualBlock(_hidden),
+        ]
+
+        # If more layers are requested, stack additional residual blocks.
+        for _ in range(max(n_layers - 1, 0)):
+            modules.append(ResidualBlock(_hidden))
+
+        self.body = torch.nn.Sequential(*modules)
         self.tail = torch.nn.Linear(_hidden, 1, bias=False)
         self.apply(init_weight)
 
-    def forward(self,x):
+    def forward(self, x):
         x = self.body(x)
         x = self.tail(x)
         return x
