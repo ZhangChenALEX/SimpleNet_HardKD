@@ -152,6 +152,16 @@ def run(
 @click.option("--pre_proj", type=int, default=0)
 @click.option("--proj_layer_type", type=int, default=0)
 @click.option("--mix_noise", type=int, default=1)
+@click.option("--use_distillation/--no_distillation", default=True, show_default=True)
+@click.option("--teacher_backbone", type=str, default="wideresnet50", show_default=True)
+@click.option("--distill_weight", type=float, default=0.1, show_default=True)
+@click.option("--distill_max_patches", type=int, default=192, show_default=True)
+@click.option("--distill_knn", type=int, default=5, show_default=True)
+@click.option("--distill_direction_weight", type=float, default=1.0, show_default=True)
+@click.option("--distill_distance_weight", type=float, default=1.0, show_default=True)
+@click.option("--distill_neighborhood_weight", type=float, default=1.0, show_default=True)
+@click.option("--distill_embedding_weight", type=float, default=0.5, show_default=True)
+@click.option("--distill_tightness_weight", type=float, default=0.25, show_default=True)
 def net(
     backbone_names,
     layers_to_extract_from,
@@ -173,6 +183,16 @@ def net(
     pre_proj,
     proj_layer_type,
     mix_noise,
+    use_distillation,
+    teacher_backbone,
+    distill_weight,
+    distill_max_patches,
+    distill_knn,
+    distill_direction_weight,
+    distill_distance_weight,
+    distill_neighborhood_weight,
+    distill_embedding_weight,
+    distill_tightness_weight,
 ):
     backbone_names = list(backbone_names)
     if len(backbone_names) > 1:
@@ -221,6 +241,16 @@ def net(
                 pre_proj=pre_proj,
                 proj_layer_type=proj_layer_type,
                 mix_noise=mix_noise,
+                use_distillation=use_distillation,
+                teacher_backbone=teacher_backbone,
+                distill_weight=distill_weight,
+                distill_max_patches=distill_max_patches,
+                distill_knn=distill_knn,
+                distill_direction_weight=distill_direction_weight,
+                distill_distance_weight=distill_distance_weight,
+                distill_neighborhood_weight=distill_neighborhood_weight,
+                distill_embedding_weight=distill_embedding_weight,
+                distill_tightness_weight=distill_tightness_weight,
             )
             simplenets.append(simplenet_inst)
         return simplenets
