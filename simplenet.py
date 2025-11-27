@@ -19,6 +19,7 @@ import time
 import tqdm
 from torch.utils.tensorboard import SummaryWriter
 
+import backbones
 import common
 import metrics
 from utils import plot_segmentation_images
@@ -148,6 +149,16 @@ class SimpleNet(torch.nn.Module):
         lr=1e-3,
         pre_proj=0, # 1
         proj_layer_type=0,
+        use_distillation=False,
+        teacher_backbone="wideresnet50",
+        distill_weight=0.1,
+        distill_max_patches=192,
+        distill_knn=5,
+        distill_direction_weight=1.0,
+        distill_distance_weight=1.0,
+        distill_neighborhood_weight=1.0,
+        distill_embedding_weight=0.5,
+        distill_tightness_weight=0.25,
         **kwargs,
     ):
         pid = os.getpid()
@@ -214,7 +225,41 @@ class SimpleNet(torch.nn.Module):
         self.discriminator.to(self.device)
         self.dsc_opt = torch.optim.Adam(self.discriminator.parameters(), lr=self.dsc_lr, weight_decay=1e-5)
         self.dsc_schl = torch.optim.lr_scheduler.CosineAnnealingLR(self.dsc_opt, (meta_epochs - aed_meta_epochs) * gan_epochs, self.dsc_lr*.4)
-        self.dsc_margin= dsc_margin 
+        self.dsc_margin= dsc_margin
+
+        # Distillation controls
+        self.use_distillation = use_distillation
+        self.distill_weight = distill_weight
+        self.distill_max_patches = distill_max_patches
+        self.distill_knn = distill_knn
+        self.distill_direction_weight = distill_direction_weight
+        self.distill_distance_weight = distill_distance_weight
+        self.distill_neighborhood_weight = distill_neighborhood_weight
+        self.distill_embedding_weight = distill_embedding_weight
+        self.distill_tightness_weight = distill_tightness_weight
+        if self.use_distillation:
+            self.teacher_backbone = backbones.load(teacher_backbone)
+            self.teacher_backbone.name = teacher_backbone
+            self.teacher_backbone.eval()
+            for p in self.teacher_backbone.parameters():
+                p.requires_grad = False
+            teacher_feature_aggregator = common.NetworkFeatureAggregator(
+                self.teacher_backbone, self.layers_to_extract_from, self.device, False
+            )
+            teacher_feature_dimensions = teacher_feature_aggregator.feature_dimensions(input_shape)
+            teacher_preprocessing = common.Preprocessing(
+                teacher_feature_dimensions, pretrain_embed_dimension
+            )
+            teacher_preadapt_aggregator = common.Aggregator(
+                target_dim=target_embed_dimension
+            )
+            _ = teacher_preadapt_aggregator.to(self.device)
+            self.teacher_modules = torch.nn.ModuleDict({
+                "feature_aggregator": teacher_feature_aggregator,
+                "preprocessing": teacher_preprocessing,
+                "preadapt_aggregator": teacher_preadapt_aggregator,
+            })
+            self.teacher_modules.to(self.device)
 
         self.model_dir = ""
         self.dataset_name = ""
@@ -240,21 +285,22 @@ class SimpleNet(torch.nn.Module):
                     image = image["image"]
                     input_image = image.to(torch.float).to(self.device)
                 with torch.no_grad():
-                    features.append(self._embed(input_image))
+                    features.append(self._embed(input_image)[0])
             return features
-        return self._embed(data)
+        return self._embed(data)[0]
 
-    def _embed(self, images, detach=True, provide_patch_shapes=False, evaluation=False):
+    def _embed(self, images, detach=True, provide_patch_shapes=False, evaluation=False, return_layer_features=False, modules=None):
         """Returns feature embeddings for images."""
 
+        modules = modules if modules is not None else self.forward_modules
         B = len(images)
         if not evaluation and self.train_backbone:
-            self.forward_modules["feature_aggregator"].train()
-            features = self.forward_modules["feature_aggregator"](images, eval=evaluation)
+            modules["feature_aggregator"].train()
+            features = modules["feature_aggregator"](images, eval=evaluation)
         else:
-            _ = self.forward_modules["feature_aggregator"].eval()
+            _ = modules["feature_aggregator"].eval()
             with torch.no_grad():
-                features = self.forward_modules["feature_aggregator"](images)
+                features = modules["feature_aggregator"](images)
 
         features = [features[layer] for layer in self.layers_to_extract_from]
 
@@ -294,15 +340,15 @@ class SimpleNet(torch.nn.Module):
             _features = _features.permute(0, -2, -1, 1, 2, 3)
             _features = _features.reshape(len(_features), -1, *_features.shape[-3:])
             features[i] = _features
+        layer_features = [x if return_layer_features else None for x in features]
         features = [x.reshape(-1, *x.shape[-3:]) for x in features]
-        
+
         # As different feature backbones & patching provide differently
         # sized features, these are brought into the correct form here.
-        features = self.forward_modules["preprocessing"](features) # pooling each feature to same channel and stack together
-        features = self.forward_modules["preadapt_aggregator"](features) # further pooling        
+        features = modules["preprocessing"](features) # pooling each feature to same channel and stack together
+        features = modules["preadapt_aggregator"](features) # further pooling
 
-
-        return features, patch_shapes
+        return features, patch_shapes, layer_features
 
     
     def test(self, training_data, test_data, save_segmentation_images):
@@ -493,10 +539,15 @@ class SimpleNet(torch.nn.Module):
                     i_iter += 1
                     img = data_item["image"]
                     img = img.to(torch.float).to(self.device)
+                    student_feats, _, student_layer_feats = self._embed(
+                        img,
+                        evaluation=False,
+                        return_layer_features=self.use_distillation,
+                    )
                     if self.pre_proj > 0:
-                        true_feats = self.pre_projection(self._embed(img, evaluation=False)[0])
+                        true_feats = self.pre_projection(student_feats)
                     else:
-                        true_feats = self._embed(img, evaluation=False)[0]
+                        true_feats = student_feats
                     
                     noise_idxs = torch.randint(0, self.mix_noise, torch.Size([true_feats.shape[0]]))
                     noise_one_hot = torch.nn.functional.one_hot(noise_idxs, num_classes=self.mix_noise).to(self.device) # (N, K)
@@ -520,6 +571,22 @@ class SimpleNet(torch.nn.Module):
                     self.logger.logger.add_scalar(f"p_fake", p_fake, self.logger.g_iter)
 
                     loss = true_loss.mean() + fake_loss.mean()
+                    if self.use_distillation:
+                        with torch.no_grad():
+                            teacher_feats, _, teacher_layer_feats = self._embed(
+                                img,
+                                evaluation=True,
+                                return_layer_features=True,
+                                modules=self.teacher_modules,
+                            )
+                        distill_loss = self._manifold_distillation_loss(
+                            student_layer_feats,
+                            teacher_layer_feats,
+                            true_feats,
+                            teacher_feats,
+                        )
+                        loss = loss + self.distill_weight * distill_loss
+                        self.logger.logger.add_scalar("distill/loss", distill_loss, self.logger.g_iter)
                     self.logger.logger.add_scalar("loss", loss, self.logger.g_iter)
                     self.logger.step()
 
@@ -552,6 +619,76 @@ class SimpleNet(torch.nn.Module):
                     pbar_str += f" p_interp:{round(sum(all_p_interp) / len(input_data), 3)}"
                 pbar.set_description_str(pbar_str)
                 pbar.update(1)
+
+
+    def _manifold_distillation_loss(self, student_layers, teacher_layers, student_embed, teacher_embed):
+        """Align manifold structures between teacher and student."""
+
+        loss_total = torch.tensor(0.0, device=self.device)
+        eps = 1e-6
+
+        if student_layers is not None and teacher_layers is not None:
+            direction_losses = []
+            distance_losses = []
+            neighborhood_losses = []
+            for s_feat, t_feat in zip(student_layers, teacher_layers):
+                if s_feat is None or t_feat is None:
+                    continue
+                s_tokens = s_feat.flatten(2)
+                t_tokens = t_feat.flatten(2)
+                patch_count = min(s_tokens.shape[1], t_tokens.shape[1])
+                if patch_count > self.distill_max_patches:
+                    idx = torch.randperm(patch_count, device=self.device)[: self.distill_max_patches]
+                    s_tokens = s_tokens[:, idx]
+                    t_tokens = t_tokens[:, idx]
+                else:
+                    s_tokens = s_tokens[:, :patch_count]
+                    t_tokens = t_tokens[:, :patch_count]
+
+                s_tokens = F.normalize(s_tokens, dim=-1)
+                t_tokens = F.normalize(t_tokens, dim=-1)
+
+                direction_losses.append((1 - (s_tokens * t_tokens).sum(-1)).mean())
+
+                s_dist = torch.cdist(s_tokens, s_tokens) + eps
+                t_dist = torch.cdist(t_tokens, t_tokens) + eps
+                s_dist = s_dist / s_dist.mean(dim=(1, 2), keepdim=True)
+                t_dist = t_dist / t_dist.mean(dim=(1, 2), keepdim=True)
+                distance_losses.append(F.smooth_l1_loss(s_dist, t_dist))
+
+                student_rel = torch.matmul(s_tokens, s_tokens.transpose(1, 2))
+                teacher_rel = torch.matmul(t_tokens, t_tokens.transpose(1, 2))
+                knn = min(self.distill_knn, teacher_rel.shape[-1] - 1)
+                if knn > 0:
+                    _, knn_idx = torch.topk(teacher_rel, k=knn + 1, dim=-1)
+                    knn_idx = knn_idx[:, :, 1:]
+                    teacher_neighbors = torch.gather(teacher_rel, 2, knn_idx)
+                    student_neighbors = torch.gather(student_rel, 2, knn_idx)
+                    neighborhood_losses.append(F.smooth_l1_loss(student_neighbors, teacher_neighbors))
+
+            if direction_losses:
+                loss_total = loss_total + self.distill_direction_weight * sum(direction_losses) / len(direction_losses)
+            if distance_losses:
+                loss_total = loss_total + self.distill_distance_weight * sum(distance_losses) / len(distance_losses)
+            if neighborhood_losses:
+                loss_total = loss_total + self.distill_neighborhood_weight * sum(neighborhood_losses) / len(neighborhood_losses)
+
+        if student_embed is not None and teacher_embed is not None and student_embed.shape[0] > 1:
+            s_norm = F.normalize(student_embed, dim=-1)
+            t_norm = F.normalize(teacher_embed, dim=-1)
+            s_pair = torch.cdist(s_norm, s_norm) + eps
+            t_pair = torch.cdist(t_norm, t_norm) + eps
+            s_pair = s_pair / s_pair.mean()
+            t_pair = t_pair / t_pair.mean()
+            embed_shape_loss = F.smooth_l1_loss(s_pair, t_pair)
+            loss_total = loss_total + self.distill_embedding_weight * embed_shape_loss
+
+            s_dispersion = s_norm.std(dim=0).mean()
+            t_dispersion = t_norm.std(dim=0).mean()
+            tightness_loss = torch.relu(s_dispersion - t_dispersion)
+            loss_total = loss_total + self.distill_tightness_weight * tightness_loss
+
+        return loss_total
 
 
     def predict(self, data, prefix=""):
@@ -603,9 +740,11 @@ class SimpleNet(torch.nn.Module):
             self.pre_projection.eval()
         self.discriminator.eval()
         with torch.no_grad():
-            features, patch_shapes = self._embed(images,
-                                                 provide_patch_shapes=True, 
-                                                 evaluation=True)
+            features, patch_shapes, _ = self._embed(
+                images,
+                provide_patch_shapes=True,
+                evaluation=True,
+            )
             if self.pre_proj > 0:
                 features = self.pre_projection(features)
 

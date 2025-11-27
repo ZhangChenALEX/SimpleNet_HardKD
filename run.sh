@@ -12,6 +12,8 @@ run_name="run"
 
 gpu=0
 seed=0
+student_backbone="wideresnet50"
+teacher_backbone="wideresnet50"
 
 common_opts=(
   --gpu "${gpu}"
@@ -24,7 +26,7 @@ common_opts=(
 
 net_opts=(
   net
-  -b wideresnet50
+  -b "${student_backbone}"
   -le layer2
   -le layer3
   --pretrain_embed_dimension 1536
@@ -40,6 +42,19 @@ net_opts=(
   --pre_proj 1
 )
 
+distill_opts=(
+  --use_distillation
+  --teacher_backbone "${teacher_backbone}"
+  --distill_weight 0.1
+  --distill_max_patches 192
+  --distill_knn 5
+  --distill_direction_weight 1.0
+  --distill_distance_weight 1.0
+  --distill_neighborhood_weight 1.0
+  --distill_embedding_weight 0.5
+  --distill_tightness_weight 0.25
+)
+
 dataset_opts=(
   dataset
   --batch_size 8
@@ -49,10 +64,10 @@ dataset_opts=(
 )
 
 # Train the model (stores checkpoints and metrics under results/<project>/<group>/<run_name>/).
-python3 main.py "${common_opts[@]}" "${net_opts[@]}" "${dataset_opts[@]}"
+python3 main.py "${common_opts[@]}" "${net_opts[@]}" "${distill_opts[@]}" "${dataset_opts[@]}"
 
 # Test using the trained checkpoints, save heatmaps, and write metrics (including inference time) to CSV.
-python3 main.py --test --save_segmentation_images "${common_opts[@]}" "${net_opts[@]}" "${dataset_opts[@]}"
+python3 main.py --test --save_segmentation_images "${common_opts[@]}" "${net_opts[@]}" "${distill_opts[@]}" "${dataset_opts[@]}"
 
 echo "Training, testing, and artifact export complete."
 echo "- Metrics CSV: ${results_dir}/${log_project}/${log_group}/${run_name}/results.csv"
