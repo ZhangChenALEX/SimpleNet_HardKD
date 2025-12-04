@@ -59,7 +59,7 @@ class Discriminator(torch.nn.Module):
         self.tail = torch.nn.Linear(_hidden, 1, bias=False)
         self.apply(init_weight)
 
-    def forward(self, x):
+    def forward(self,x):
         x = self.body(x)
         x = self.tail(x)
         return x
