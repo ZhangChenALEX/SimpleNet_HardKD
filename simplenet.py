@@ -529,19 +529,33 @@ class SimpleNet(torch.nn.Module):
         legend_handles = []
 
         pred_binary = (pred_mask > 0.5).astype(float)
-        pred_overlay = np.ma.masked_where(pred_binary == 0, pred_binary)
+        pred_overlay = np.where(pred_binary > 0, 1.0, np.nan)
         pred_cmap = ListedColormap([(0, 0, 0, 0), (0.894, 0.102, 0.207, 0.6)])
 
         if gt_mask is not None:
             gt_binary = (gt_mask > 0.5).astype(float)
-            gt_overlay = np.ma.masked_where(gt_binary == 0, gt_binary)
-            gt_cmap = ListedColormap([(0, 0, 0, 0), (0.298, 0.686, 0.314, 0.5)])
-            plt.imshow(gt_overlay, cmap=gt_cmap, interpolation="none")
-            plt.contour(gt_binary, colors="#4daf4a", linewidths=1.0)
+            gt_overlay = np.where(gt_binary > 0, 1.0, np.nan)
+            gt_cmap = ListedColormap([(0, 0, 0, 0), (0.298, 0.686, 0.314, 0.45)])
+            plt.imshow(
+                gt_overlay,
+                cmap=gt_cmap,
+                vmin=0,
+                vmax=1,
+                interpolation="nearest",
+                zorder=2,
+            )
+            plt.contour(gt_binary, colors="#4daf4a", linewidths=1.0, zorder=3)
             legend_handles.append(Patch(color="#4daf4a", alpha=0.5, label="Ground truth"))
 
-        plt.imshow(pred_overlay, cmap=pred_cmap, interpolation="none")
-        plt.contour(pred_binary, colors="#e41a1c", linewidths=1.0)
+        plt.imshow(
+            pred_overlay,
+            cmap=pred_cmap,
+            vmin=0,
+            vmax=1,
+            interpolation="nearest",
+            zorder=4,
+        )
+        plt.contour(pred_binary, colors="#e41a1c", linewidths=1.0, zorder=5)
         legend_handles.append(Patch(color="#e41a1c", alpha=0.6, label="Prediction (median)"))
 
         plt.axis("off")
