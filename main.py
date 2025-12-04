@@ -36,6 +36,9 @@ _DATASETS = {
 @click.option("--run_name", type=str, default="test")
 @click.option("--test", is_flag=True)
 @click.option("--save_segmentation_images", is_flag=True, default=False, show_default=True)
+@click.option("--visual_report", is_flag=True, default=False, show_default=True)
+@click.option("--visual_report_dir", type=str, default="analysis", show_default=True)
+@click.option("--visual_report_index", type=int, default=0, show_default=True)
 def main(**kwargs):
     pass
 
@@ -50,7 +53,10 @@ def run(
     log_project,
     run_name,
     test,
-    save_segmentation_images
+    save_segmentation_images,
+    visual_report,
+    visual_report_dir,
+    visual_report_index,
 ):
     methods = {key: item for (key, item) in methods}
 
@@ -101,6 +107,9 @@ def run(
                     dataloaders["training"],
                     dataloaders["testing"],
                     save_segmentation_images,
+                    visualize_report=visual_report,
+                    report_dir=visual_report_dir,
+                    report_sample_index=visual_report_index,
                 )
 
             result_collect.append(

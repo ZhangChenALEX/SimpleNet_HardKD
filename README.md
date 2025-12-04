@@ -24,6 +24,7 @@ Install the requirements with your preferred environment manager (e.g., `conda`,
 - Default target: **MvTecAD**. Download from the [official site](https://www.mvtec.com/company/research/datasets/mvtec-ad/).
 - Expected layout: keep the original folder structure. By default `run.sh` assumes the dataset sits next to this repo in a sibling folder named `mvtec` (i.e., `../mvtec`).
 - To use a different location or subset of classes, edit `datapath` or `classes` in `run.sh`, or pass the corresponding CLI flags to `main.py`.
+  - If you want a quick per-image visual report (heatmap overlay, GT comparison, FPR histogram, median-threshold FP/FN list), add the `--visual_report` flag to the testing command. Use `--visual_report_dir` to pick an output folder (default: `analysis`) and `--visual_report_index` to choose which test sample to visualize (0-based index).
 
 ## How to Run
 The project ships with a convenience script that trains and then tests in one go.
