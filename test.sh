@@ -1,5 +1,14 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
+#SBATCH -p l20-gpu                # 使用 L20 GPU 队列
+#SBATCH --nodelist=dkucc-core-gpu-06   # 指定节点 06（关键行）
+#SBATCH --gres=gpu:1              # 申请 1 块 GPU
+#SBATCH --gres-flags=enforce-binding
+#SBATCH -c 4                      # 4 CPU cores
+#SBATCH --mem=32G                 # 32G 内存
+#SBATCH -t 48:00:00               # 最长运行 48 小时
+#SBATCH -o slurm-%j.out           # 标准输出日志
+#SBATCH -e slurm-%j.err           # 错误输出日志
+
 
 # Optional overrides: you can pass custom paths as positional arguments,
 # e.g. `bash test.sh /path/to/mvtec /path/to/results run42`.
