@@ -22,6 +22,7 @@ import tqdm
 from torch.utils.tensorboard import SummaryWriter
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
+from matplotlib.colors import ListedColormap
 from PIL import Image
 
 import backbones
@@ -526,11 +527,23 @@ class SimpleNet(torch.nn.Module):
         plt.figure(figsize=(6, 6))
         plt.imshow(image_uint8)
         legend_handles = []
+
+        pred_binary = (pred_mask > 0.5).astype(float)
+        pred_overlay = np.ma.masked_where(pred_binary == 0, pred_binary)
+        pred_cmap = ListedColormap([(0, 0, 0, 0), (0.894, 0.102, 0.207, 0.6)])
+
         if gt_mask is not None:
-            plt.imshow(gt_mask, cmap="Greens", alpha=0.35)
-            legend_handles.append(Patch(color="#4daf4a", alpha=0.35, label="Ground truth"))
-        plt.imshow(pred_mask, cmap="Reds", alpha=0.35)
-        legend_handles.append(Patch(color="#e41a1c", alpha=0.35, label="Prediction (median)"))
+            gt_binary = (gt_mask > 0.5).astype(float)
+            gt_overlay = np.ma.masked_where(gt_binary == 0, gt_binary)
+            gt_cmap = ListedColormap([(0, 0, 0, 0), (0.298, 0.686, 0.314, 0.5)])
+            plt.imshow(gt_overlay, cmap=gt_cmap, interpolation="none")
+            plt.contour(gt_binary, colors="#4daf4a", linewidths=1.0)
+            legend_handles.append(Patch(color="#4daf4a", alpha=0.5, label="Ground truth"))
+
+        plt.imshow(pred_overlay, cmap=pred_cmap, interpolation="none")
+        plt.contour(pred_binary, colors="#e41a1c", linewidths=1.0)
+        legend_handles.append(Patch(color="#e41a1c", alpha=0.6, label="Prediction (median)"))
+
         plt.axis("off")
         if legend_handles:
             plt.legend(handles=legend_handles, loc="upper right", frameon=False)
