@@ -24,7 +24,7 @@ Install the requirements with your preferred environment manager (e.g., `conda`,
 - Default target: **MvTecAD**. Download from the [official site](https://www.mvtec.com/company/research/datasets/mvtec-ad/).
 - Expected layout: keep the original folder structure. By default `run.sh` assumes the dataset sits next to this repo in a sibling folder named `mvtec` (i.e., `../mvtec`).
 - To use a different location or subset of classes, edit `datapath` or `classes` in `run.sh`, or pass the corresponding CLI flags to `main.py`.
-  - If you want a quick per-image visual report (heatmap overlay, GT comparison, FPR histogram, median-threshold FP/FN list), add the `--visual_report` flag to the testing command (already enabled inside `test.sh`). Use `--visual_report_dir` to pick an output folder (default: `analysis`) and `--visual_report_index` to choose which test sample to visualize (0-based index). The report now also saves structured metrics (AUROC/PRO, thresholds) plus per-image FPR and score tables. Overlay filenames include the original image name (and the unnormalized original is also saved) so you can easily trace which sample each figure comes from; the GT overlay is built from the dataset's ground-truth mask file (e.g., `ground_truth/.../*_mask.png`).
+  - If you want a quick per-image visual report (heatmap overlay, normalized heatmap+GT, difference map, pixel score histogram, GT comparison, FPR histogram, median-threshold FP/FN list), add the `--visual_report` flag to the testing command (already enabled inside `test.sh`). Use `--visual_report_dir` to pick an output folder (default: `analysis`) and `--visual_report_index` to choose which test sample to visualize (0-based index). The report also saves structured metrics (AUROC/PRO, thresholds) plus per-image FPR and score tables. Overlay filenames include the original image name (and the unnormalized original is also saved) so you can easily trace which sample each figure comes from; the GT overlay is built from the dataset's ground-truth mask file (e.g., `ground_truth/.../*_mask.png`).
 
 ## How to Run
 The project ships with a convenience script that trains and then tests in one go.
@@ -65,7 +65,7 @@ bash test.sh [datapath] [results_dir] [run_name] [mvtec_class]
 ## Where to Find Outputs
 - **Metrics CSV**: `results/<log_project>/<log_group>/<run_name>/results.csv` (adjustable via `run.sh`). The last row contains the mean over all evaluated classes.
 - **Heatmaps & masks**: saved under `output/` in the repository root when `--save_segmentation_images` is enabled.
-- **Visual report bundle**: stored under `./analysis` by default (auto-enabled in `test.sh`) and includes `visual_report.txt`/`visual_report.json` (AUROC, PRO, thresholds, FP/FN lists), `fpr_distribution.png`, `fpr_values.csv`, `image_score_distribution.png`, `image_scores.csv`, the saved original image, and the overlay figures (heatmap + prediction vs. dataset GT mask).
+- **Visual report bundle**: stored under `./analysis` by default (auto-enabled in `test.sh`) and includes `visual_report.txt`/`visual_report.json` (AUROC, PRO, thresholds, FP/FN lists), `fpr_distribution.png`, `fpr_values.csv`, `image_score_distribution.png`, `image_scores.csv`, the saved original image, and multiple overlays: heatmap overlay, normalized 0–1 heatmap with GT, prediction vs. dataset GT mask, FP/FN difference map, and per-class pixel score histogram.
 
 ## Citation
 ```bibtex

@@ -524,6 +524,27 @@ class SimpleNet(torch.nn.Module):
         plt.savefig(report_root / f"{sample_stem}_heatmap_overlay.png", dpi=200)
         plt.close()
 
+        # Normalized heatmap (0-1 grayscale) with GT overlay
+        if gt_mask is not None:
+            plt.figure(figsize=(6, 6))
+            plt.imshow(heatmap, cmap="gray", vmin=0, vmax=1)
+            gt_binary = (gt_mask > 0.5).astype(float)
+            gt_overlay = np.where(gt_binary > 0, 1.0, np.nan)
+            gt_cmap = ListedColormap([(0, 0, 0, 0), (0.298, 0.686, 0.314, 0.45)])
+            plt.imshow(
+                gt_overlay,
+                cmap=gt_cmap,
+                vmin=0,
+                vmax=1,
+                interpolation="nearest",
+                zorder=2,
+            )
+            plt.contour(gt_binary, colors="#4daf4a", linewidths=1.0, zorder=3)
+            plt.axis("off")
+            plt.tight_layout()
+            plt.savefig(report_root / f"{sample_stem}_heatmap_with_gt.png", dpi=200)
+            plt.close()
+
         plt.figure(figsize=(6, 6))
         plt.imshow(image_uint8)
         legend_handles = []
@@ -565,6 +586,37 @@ class SimpleNet(torch.nn.Module):
         plt.savefig(report_root / f"{sample_stem}_prediction_vs_gt.png", dpi=200)
         plt.close()
 
+        # Difference map highlighting FP/FN regions against GT
+        if gt_mask is not None:
+            fp_mask = np.logical_and(pred_binary > 0, gt_binary == 0).astype(float)
+            fn_mask = np.logical_and(pred_binary == 0, gt_binary > 0).astype(float)
+
+            fp_overlay = np.where(fp_mask > 0, 1.0, np.nan)
+            fn_overlay = np.where(fn_mask > 0, 1.0, np.nan)
+            fp_cmap = ListedColormap([(0, 0, 0, 0), (0.894, 0.102, 0.207, 0.6)])
+            fn_cmap = ListedColormap([(0, 0, 0, 0), (0.255, 0.412, 0.882, 0.55)])
+
+            plt.figure(figsize=(6, 6))
+            plt.imshow(image_uint8)
+            plt.imshow(fp_overlay, cmap=fp_cmap, vmin=0, vmax=1, interpolation="nearest", zorder=3)
+            plt.imshow(fn_overlay, cmap=fn_cmap, vmin=0, vmax=1, interpolation="nearest", zorder=4)
+            if fp_mask.any():
+                plt.contour(fp_mask, colors="#e41a1c", linewidths=1.0, zorder=5)
+            if fn_mask.any():
+                plt.contour(fn_mask, colors="#4169e1", linewidths=1.0, zorder=6)
+            plt.axis("off")
+            plt.legend(
+                handles=[
+                    Patch(color="#e41a1c", alpha=0.6, label="False Positive"),
+                    Patch(color="#4169e1", alpha=0.55, label="False Negative"),
+                ],
+                loc="upper right",
+                frameon=False,
+            )
+            plt.tight_layout()
+            plt.savefig(report_root / f"{sample_stem}_difference_map.png", dpi=200)
+            plt.close()
+
         original_image_path = report_root / f"{sample_stem}_original.png"
         plt.imsave(original_image_path, image_uint8)
 
@@ -588,6 +640,23 @@ class SimpleNet(torch.nn.Module):
         plt.tight_layout()
         plt.savefig(report_root / "fpr_distribution.png", dpi=200)
         plt.close()
+
+        # Pixel score distribution for normal vs. anomaly pixels (requires GT masks)
+        if gt_mask is not None:
+            anomaly_pixels = heatmap[gt_mask > 0.5]
+            normal_pixels = heatmap[gt_mask <= 0.5]
+            plt.figure(figsize=(7, 4))
+            if normal_pixels.size:
+                plt.hist(normal_pixels, bins=30, alpha=0.6, label="Normal pixels", color="#4c72b0", density=True)
+            if anomaly_pixels.size:
+                plt.hist(anomaly_pixels, bins=30, alpha=0.6, label="Anomaly pixels", color="#e41a1c", density=True)
+            plt.xlabel("Normalized pixel score")
+            plt.ylabel("Density")
+            plt.title("Pixel score distribution by GT class")
+            plt.legend()
+            plt.tight_layout()
+            plt.savefig(report_root / f"{sample_stem}_pixel_score_hist.png", dpi=200)
+            plt.close()
 
         fpr_stats = {
             "pixel_fpr_mean": float(np.mean(fpr)),
