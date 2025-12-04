@@ -45,6 +45,16 @@ python3 main.py --dataset mvtec --datapath ../mvtec --meta_epochs 40
 python3 main.py --dataset mvtec --datapath ../mvtec --test --save_segmentation_images
 ```
 
+For **test only**, run:
+
+```bash
+bash test.sh [datapath] [results_dir] [run_name]
+```
+
+- Defaults: `datapath=../mvtec`, `results_dir=results`, `run_name=run`, `log_project=MVTecAD_Results`, `log_group=simplenet_mvtec`.
+- The script expects pretrained weights at `results/<log_project>/<log_group>/<run_name>/models/0/mvtec/models.ckpt` and will abort with a clear error if the file is missing.
+- Outputs remain unchanged: metrics CSV under `results/<log_project>/<log_group>/<run_name>/results.csv`, segmentation heatmaps under `./output/`, and optional visual reports under `./analysis/` (when `--visual_report` is added to the python command inside the script).
+
 ## End-to-End Workflow (English)
 1. **Prepare data**: place the MvTecAD dataset at `../mvtec` or point `datapath` elsewhere.
 2. **Configure run**: adjust `run.sh` variables (paths, epochs, class list) or supply equivalent CLI flags.

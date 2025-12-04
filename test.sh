@@ -1,22 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Path to the MVTec dataset (expects the "mvtec" folder next to this repo by default).
-# Update this if your dataset lives elsewhere.
-datapath="../mvtec"
+# Optional overrides: you can pass custom paths as positional arguments,
+# e.g. `bash test.sh /path/to/mvtec /path/to/results run42`.
+datapath="${1:-../mvtec}"
+results_dir="${2:-results}"
+run_name="${3:-run}"
 
-# Existing results folder that already contains trained checkpoints.
-# Set run_name to the same value you used during training so the script
-# can find models/<idx>/<dataset>/models.ckpt under results_dir/log_project/log_group/run_name/.
-results_dir="results"
-log_project="MVTecAD_Results"
-log_group="simplenet_mvtec"
-run_name="run"
+# These rarely need changing, but can be overridden with env vars if desired.
+log_project="${LOG_PROJECT:-MVTecAD_Results}"
+log_group="${LOG_GROUP:-simplenet_mvtec}"
 
 gpu=0
 seed=0
 student_backbone="wideresnet50"
 teacher_backbone="wideresnet50"
+
+dataset_name="mvtec"
+ckpt_path="${results_dir}/${log_project}/${log_group}/${run_name}/models/0/${dataset_name}/models.ckpt"
+
+echo "[Test] Using dataset at: ${datapath}"
+echo "[Test] Expecting checkpoint: ${ckpt_path}"
+if [[ ! -f "${ckpt_path}" ]]; then
+  echo "[Error] Pretrained weights not found. Please set run_name/results_dir/log_project/log_group to match your training run."
+  exit 1
+fi
 
 common_opts=(
   --gpu "${gpu}"
@@ -63,7 +71,7 @@ dataset_opts=(
   --batch_size 8
   --resize 329
   --imagesize 288
-  mvtec "${datapath}"
+  "${dataset_name}" "${datapath}"
 )
 
 # Test using the previously trained checkpoints, save heatmaps/masks, and
@@ -74,3 +82,4 @@ python3 main.py --test --save_segmentation_images \
 echo "Testing complete."
 echo "- Metrics CSV: ${results_dir}/${log_project}/${log_group}/${run_name}/results.csv"
 echo "- Saved segmentation heatmaps: ./output"
+echo "- Visual report (enable by adding --visual_report inside the python command): ./analysis"
