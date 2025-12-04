@@ -6,6 +6,7 @@
 # ------------------------------------------------------------------
 
 """detection methods."""
+import json
 import logging
 import os
 import pickle
@@ -20,6 +21,8 @@ import time
 import tqdm
 from torch.utils.tensorboard import SummaryWriter
 import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
+from PIL import Image
 
 import backbones
 import common
@@ -42,15 +45,17 @@ class Discriminator(torch.nn.Module):
 
         _hidden = in_planes if hidden is None else hidden
         self.body = torch.nn.Sequential()
-        for i in range(n_layers-1):
+        for i in range(n_layers - 1):
             _in = in_planes if i == 0 else _hidden
             _hidden = int(_hidden // 1.5) if hidden is None else hidden
-            self.body.add_module('block%d'%(i+1),
-                                 torch.nn.Sequential(
-                                     torch.nn.Linear(_in, _hidden),
-                                     torch.nn.BatchNorm1d(_hidden),
-                                     torch.nn.LeakyReLU(0.2)
-                                 ))
+            self.body.add_module(
+                f"block{i+1}",
+                torch.nn.Sequential(
+                    torch.nn.Linear(_in, _hidden),
+                    torch.nn.BatchNorm1d(_hidden),
+                    torch.nn.LeakyReLU(0.2),
+                ),
+            )
         self.tail = torch.nn.Linear(_hidden, 1, bias=False)
         self.apply(init_weight)
 
@@ -398,6 +403,10 @@ class SimpleNet(torch.nn.Module):
                 masks_gt,
                 report_dir,
                 report_sample_index,
+                auroc,
+                full_pixel_auroc,
+                pro,
+                inference_time,
             )
 
         LOGGER.info(
@@ -464,6 +473,10 @@ class SimpleNet(torch.nn.Module):
         masks_gt,
         report_dir,
         report_sample_index,
+        auroc=None,
+        pixel_auroc=None,
+        pro=None,
+        inference_time=None,
     ):
         report_root = Path(report_dir)
         report_root.mkdir(parents=True, exist_ok=True)
@@ -471,6 +484,12 @@ class SimpleNet(torch.nn.Module):
         sample_index = int(report_sample_index) % len(norm_segmentations)
         dataset = test_loader.dataset
         sample = dataset[sample_index]
+        image_entries = getattr(dataset, "data_to_iterate", [None] * len(norm_segmentations))
+        sample_entry = image_entries[sample_index] if sample_index < len(image_entries) else None
+        sample_image_path = sample_entry[2] if sample_entry and len(sample_entry) > 2 else None
+        sample_gt_path = sample_entry[3] if sample_entry and len(sample_entry) > 3 else None
+        sample_image_name = Path(sample_image_path).name if sample_image_path else f"sample_{sample_index}"
+        sample_stem = Path(sample_image_name).stem
 
         image = sample["image"].cpu().numpy()
         mean = np.array(dataset.transform_mean).reshape(3, 1, 1)
@@ -481,25 +500,46 @@ class SimpleNet(torch.nn.Module):
         heatmap = np.squeeze(norm_segmentations[sample_index])
         pixel_threshold = float(np.median(norm_segmentations))
         pred_mask = (heatmap > pixel_threshold).astype(float)
-        gt_mask = sample.get("mask", np.zeros_like(pred_mask))
-        gt_mask = np.squeeze(gt_mask).cpu().numpy()
+        gt_mask = None
+        if sample_gt_path:
+            try:
+                raw_gt = Image.open(sample_gt_path).convert("L")
+                gt_tensor = dataset.transform_mask(raw_gt) if hasattr(dataset, "transform_mask") else raw_gt
+                if isinstance(gt_tensor, torch.Tensor):
+                    gt_mask = np.squeeze(gt_tensor.cpu().numpy())
+                else:
+                    gt_mask = np.squeeze(np.array(gt_tensor))
+            except FileNotFoundError:
+                gt_mask = None
+        if gt_mask is None:
+            gt_mask = sample.get("mask", np.zeros_like(pred_mask))
+            gt_mask = np.squeeze(gt_mask).cpu().numpy()
 
         plt.figure(figsize=(6, 6))
         plt.imshow(image_uint8)
         plt.imshow(heatmap.squeeze(), cmap="jet", alpha=0.5)
         plt.axis("off")
         plt.tight_layout()
-        plt.savefig(report_root / "sample_heatmap_overlay.png", dpi=200)
+        plt.savefig(report_root / f"{sample_stem}_heatmap_overlay.png", dpi=200)
         plt.close()
 
         plt.figure(figsize=(6, 6))
         plt.imshow(image_uint8)
-        plt.imshow(gt_mask, cmap="Greens", alpha=0.35)
+        legend_handles = []
+        if gt_mask is not None:
+            plt.imshow(gt_mask, cmap="Greens", alpha=0.35)
+            legend_handles.append(Patch(color="#4daf4a", alpha=0.35, label="Ground truth"))
         plt.imshow(pred_mask, cmap="Reds", alpha=0.35)
+        legend_handles.append(Patch(color="#e41a1c", alpha=0.35, label="Prediction (median)"))
         plt.axis("off")
+        if legend_handles:
+            plt.legend(handles=legend_handles, loc="upper right", frameon=False)
         plt.tight_layout()
-        plt.savefig(report_root / "prediction_vs_gt.png", dpi=200)
+        plt.savefig(report_root / f"{sample_stem}_prediction_vs_gt.png", dpi=200)
         plt.close()
+
+        original_image_path = report_root / f"{sample_stem}_original.png"
+        plt.imsave(original_image_path, image_uint8)
 
         flat_masks = np.array(masks_gt)
         if flat_masks.size == 0:
@@ -511,6 +551,7 @@ class SimpleNet(torch.nn.Module):
         fp_counts = np.logical_and(pixel_scores > pixel_threshold, pixel_labels == 0).sum(axis=1)
         with np.errstate(divide="ignore", invalid="ignore"):
             fpr = np.divide(fp_counts, negative_pixels, where=negative_pixels > 0)
+        fpr = np.nan_to_num(fpr, nan=0.0, posinf=0.0, neginf=0.0)
 
         plt.figure(figsize=(7, 4))
         plt.hist(fpr, bins=20, color="#ff7f50", edgecolor="black")
@@ -520,6 +561,21 @@ class SimpleNet(torch.nn.Module):
         plt.tight_layout()
         plt.savefig(report_root / "fpr_distribution.png", dpi=200)
         plt.close()
+
+        fpr_stats = {
+            "pixel_fpr_mean": float(np.mean(fpr)),
+            "pixel_fpr_median": float(np.median(fpr)),
+            "pixel_fpr_max": float(np.max(fpr)),
+            "pixel_fpr_min": float(np.min(fpr)),
+        }
+
+        fpr_table = report_root / "fpr_values.csv"
+        with open(fpr_table, "w", encoding="utf-8") as handle:
+            handle.write("image,fpr\n")
+            for idx, value in enumerate(fpr):
+                entry = image_entries[idx] if idx < len(image_entries) else None
+                image_name = entry[2] if entry and len(entry) > 2 else f"sample_{idx}"
+                handle.write(f"{image_name},{float(value)}\n")
 
         image_level_scores = norm_scores
         if image_level_scores.ndim > 1:
@@ -547,17 +603,41 @@ class SimpleNet(torch.nn.Module):
         plt.savefig(report_root / "image_score_distribution.png", dpi=200)
         plt.close()
 
+        image_score_table = report_root / "image_scores.csv"
+        with open(image_score_table, "w", encoding="utf-8") as handle:
+            handle.write("image,score,prediction,label\n")
+            for idx, (score, pred, label) in enumerate(zip(image_level_scores, image_predictions, labels_gt)):
+                entry = image_entries[idx] if idx < len(image_entries) else None
+                image_name = entry[2] if entry and len(entry) > 2 else f"sample_{idx}"
+                handle.write(f"{image_name},{float(score)},{int(pred)},{int(label)}\n")
+
         summary = {
             "sample_index": sample_index,
+            "sample_image_name": sample_image_name,
+            "sample_image_path": sample_image_path,
+            "sample_gt_path": sample_gt_path,
             "pixel_threshold_median": pixel_threshold,
             "image_threshold_median": image_threshold,
             "false_positive_images": false_positives,
             "false_negative_images": false_negatives,
         }
+        if auroc is not None:
+            summary["instance_auroc"] = float(auroc)
+        if pixel_auroc is not None:
+            summary["pixel_auroc"] = float(pixel_auroc)
+        if pro is not None:
+            summary["pro"] = float(pro)
+        if inference_time is not None:
+            summary["inference_time_per_image"] = float(inference_time)
+        summary.update(fpr_stats)
         summary_path = report_root / "visual_report.txt"
         with open(summary_path, "w", encoding="utf-8") as handle:
             for key, value in summary.items():
                 handle.write(f"{key}: {value}\n")
+
+        json_summary_path = report_root / "visual_report.json"
+        with open(json_summary_path, "w", encoding="utf-8") as handle:
+            json.dump(summary, handle, ensure_ascii=False, indent=2)
 
         
     
