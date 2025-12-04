@@ -48,11 +48,11 @@ python3 main.py --dataset mvtec --datapath ../mvtec --test --save_segmentation_i
 For **test only**, run:
 
 ```bash
-bash test.sh [datapath] [results_dir] [run_name]
+bash test.sh [datapath] [results_dir] [run_name] [mvtec_class]
 ```
 
-- Defaults: `datapath=../mvtec`, `results_dir=results`, `run_name=run`, `log_project=MVTecAD_Results`, `log_group=simplenet_mvtec`.
-- The script expects pretrained weights at `results/<log_project>/<log_group>/<run_name>/models/0/mvtec/models.ckpt` and will abort with a clear error if the file is missing.
+- Defaults: `datapath=../mvtec`, `results_dir=results`, `run_name=run`, `mvtec_class=capsule`, `log_project=MVTecAD_Results`, `log_group=simplenet_mvtec`.
+- The script expects pretrained weights at `results/<log_project>/<log_group>/<run_name>/models/0/mvtec_<mvtec_class>/ckpt.pth` (matching the class you pass via `mvtec_class`) and will abort with a clear error if the file is missing.
 - Outputs remain unchanged: metrics CSV under `results/<log_project>/<log_group>/<run_name>/results.csv`, segmentation heatmaps under `./output/`, and optional visual reports under `./analysis/` (when `--visual_report` is added to the python command inside the script).
 
 ## End-to-End Workflow (English)

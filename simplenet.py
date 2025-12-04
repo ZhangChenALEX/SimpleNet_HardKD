@@ -363,13 +363,23 @@ class SimpleNet(torch.nn.Module):
         report_sample_index=0,
     ):
 
-        ckpt_path = os.path.join(self.ckpt_dir, "models.ckpt")
-        if os.path.exists(ckpt_path):
-            state_dicts = torch.load(ckpt_path, map_location=self.device)
+        ckpt_candidates = ["ckpt.pth", "models.ckpt"]
+        state_dicts = None
+        for candidate in ckpt_candidates:
+            ckpt_path = os.path.join(self.ckpt_dir, candidate)
+            if os.path.exists(ckpt_path):
+                state_dicts = torch.load(ckpt_path, map_location=self.device)
+                break
+
+        if state_dicts:
             if "pretrained_enc" in state_dicts:
                 self.feature_enc.load_state_dict(state_dicts["pretrained_enc"])
             if "pretrained_dec" in state_dicts:
                 self.feature_dec.load_state_dict(state_dicts["pretrained_dec"])
+            if "discriminator" in state_dicts:
+                self.discriminator.load_state_dict(state_dicts["discriminator"])
+            if "pre_projection" in state_dicts and self.pre_proj > 0:
+                self.pre_projection.load_state_dict(state_dicts["pre_projection"])
 
         (
             scores,

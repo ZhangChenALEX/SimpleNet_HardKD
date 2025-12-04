@@ -25,8 +25,9 @@ seed=0
 student_backbone="wideresnet50"
 teacher_backbone="wideresnet50"
 
-dataset_name="mvtec"
-ckpt_path="${results_dir}/${log_project}/${log_group}/${run_name}/models/0/${dataset_name}/models.ckpt"
+dataset_name="mvtec_${mvtec_class}"
+ckpt_filename="${CKPT_BASENAME:-ckpt.pth}"
+ckpt_path="${results_dir}/${log_project}/${log_group}/${run_name}/models/0/${dataset_name}/${ckpt_filename}"
 
 echo "[Test] Using dataset at: ${datapath}"
 echo "[Test] Expecting checkpoint: ${ckpt_path}"
@@ -80,7 +81,8 @@ dataset_opts=(
   --batch_size 8
   --resize 329
   --imagesize 288
-  "${dataset_name}" "${datapath}"
+  -d "${mvtec_class}"
+  mvtec "${datapath}"
 )
 
 # Test using the previously trained checkpoints, save heatmaps/masks, and
