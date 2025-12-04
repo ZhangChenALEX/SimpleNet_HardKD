@@ -86,16 +86,39 @@ def compute_pixelwise_retrieval_metrics(anomaly_segmentations, ground_truth_mask
 import pandas as pd
 from skimage import measure
 def compute_pro(masks, amaps, num_th=200):
+    """Compute Per-Region Overlap (PRO) score.
+
+    This helper normalizes incoming mask/heatmap shapes to (N, H, W) so single
+    samples with an extra channel dimension won't trigger indexing errors.
+    """
+
+    masks = np.asarray(masks)
+    amaps = np.asarray(amaps)
+
+    # Standardize shapes to (N, H, W)
+    if masks.ndim == 2:
+        masks = masks[None, ...]
+    if masks.ndim == 4 and masks.shape[1] == 1:
+        masks = masks[:, 0]
+    if amaps.ndim == 2:
+        amaps = amaps[None, ...]
+    if amaps.ndim == 4 and amaps.shape[1] == 1:
+        amaps = amaps[:, 0]
+
+    if masks.shape != amaps.shape:
+        raise ValueError(
+            f"Mask/amap shape mismatch: masks {masks.shape}, amaps {amaps.shape}"
+        )
 
     records = []
     binary_amaps = np.zeros_like(amaps, dtype=np.bool_)
 
     min_th = amaps.min()
     max_th = amaps.max()
-    delta = (max_th - min_th) / num_th
+    delta = (max_th - min_th) / num_th if max_th > min_th else 1.0
 
     k = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-    for th in np.arange(min_th, max_th, delta):
+    for th in np.arange(min_th, max_th + delta, delta):
         binary_amaps[amaps <= th] = 0
         binary_amaps[amaps > th] = 1
 
@@ -110,9 +133,9 @@ def compute_pro(masks, amaps, num_th=200):
 
         inverse_masks = 1 - masks
         fp_pixels = np.logical_and(inverse_masks, binary_amaps).sum()
-        fpr = fp_pixels / inverse_masks.sum()
+        fpr = fp_pixels / max(inverse_masks.sum(), 1)
 
-        records.append({"pro": np.mean(pros), "fpr": fpr, "threshold": th})
+        records.append({"pro": np.mean(pros) if pros else 0.0, "fpr": fpr, "threshold": th})
 
     if not records:
         return 0.0
