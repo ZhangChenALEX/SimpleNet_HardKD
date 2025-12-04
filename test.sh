@@ -8,44 +8,38 @@
 #SBATCH -t 48:00:00
 #SBATCH -o slurm-%j.out
 #SBATCH -e slurm-%j.err
+set -euo pipefail
 
-############################
-# 1. 读取输入参数
-############################
-mvtec_class="${1:-capsule}"      # 默认 capsule，可传 carpet/bottle 等
+# Optional overrides: you can pass custom paths as positional arguments,
+# e.g. `sbatch test.sh /path/to/mvtec /path/to/results run42 capsule`.
 datapath="${1:-../mvtec}"
 results_dir="${2:-results}"
 run_name="${3:-run}"
+mvtec_class="${4:-capsule}"
 
-log_project="MVTecAD_Results"
-log_group="simplenet_mvtec"
+# These rarely need changing, but can be overridden with env vars if desired.
+log_project="${LOG_PROJECT:-MVTecAD_Results}"
+log_group="${LOG_GROUP:-simplenet_mvtec}"
 
-echo "[Test] Class: ${mvtec_class}"
-echo "[Test] Dataset: ${datapath}"
-echo "[Test] Results dir: ${results_dir}"
+gpu=0
+seed=0
+student_backbone="wideresnet50"
+teacher_backbone="wideresnet50"
 
-############################
-# 2. checkpoint 路径
-############################
-ckpt_path="${results_dir}/${log_project}/${log_group}/${run_name}/models/0/mvtec_${mvtec_class}/ckpt.pth"
+dataset_name="mvtec_${mvtec_class}"
+ckpt_filename="${CKPT_BASENAME:-ckpt.pth}"
+ckpt_path="${results_dir}/${log_project}/${log_group}/${run_name}/models/0/${dataset_name}/${ckpt_filename}"
 
-echo "[Test] Expecting checkpoint at:"
-echo "       ${ckpt_path}"
-
+echo "[Test] Using dataset at: ${datapath}"
+echo "[Test] Expecting checkpoint: ${ckpt_path}"
 if [[ ! -f "${ckpt_path}" ]]; then
-    echo "[Error] Could not find checkpoint!"
-    echo "Path was:"
-    echo "  ${ckpt_path}"
-    echo "Please make sure mvtec_${mvtec_class} was trained."
-    exit 1
+  echo "[Error] Pretrained weights not found. Please set run_name/results_dir/log_project/log_group to match your training run."
+  exit 1
 fi
 
-############################
-# 3. python 运行参数
-############################
 common_opts=(
-  --gpu 0
-  --seed 0
+  --gpu "${gpu}"
+  --seed "${seed}"
   --log_group "${log_group}"
   --log_project "${log_project}"
   --results_path "${results_dir}"
@@ -54,7 +48,7 @@ common_opts=(
 
 net_opts=(
   net
-  -b wideresnet50
+  -b "${student_backbone}"
   -le layer2
   -le layer3
   --pretrain_embed_dimension 1536
@@ -72,7 +66,7 @@ net_opts=(
 
 distill_opts=(
   --use_distillation
-  --teacher_backbone wideresnet50
+  --teacher_backbone "${teacher_backbone}"
   --distill_weight 0.1
   --distill_max_patches 192
   --distill_knn 5
@@ -92,22 +86,12 @@ dataset_opts=(
   mvtec "${datapath}"
 )
 
-############################
-# 4. Run test + visual report
-############################
-echo "[Test] Running evaluation and visual report generation..."
-
-python3 main.py --test --save_segmentation_images --visual_report \
+# Test using the previously trained checkpoints, save heatmaps/masks, and
+# optionally add --visual_report to emit the per-sample analysis bundle.
+python3 main.py --test --save_segmentation_images \
   "${common_opts[@]}" "${net_opts[@]}" "${distill_opts[@]}" "${dataset_opts[@]}"
 
-echo "======================================="
 echo "Testing complete."
-echo "Metrics CSV:"
-echo "  ${results_dir}/${log_project}/${log_group}/${run_name}/results.csv"
-echo ""
-echo "Heatmaps saved to:"
-echo "  ./output/mvtec_${mvtec_class}/"
-echo ""
-echo "Visual report saved to:"
-echo "  ./analysis/mvtec_${mvtec_class}/"
-echo "======================================="
+echo "- Metrics CSV: ${results_dir}/${log_project}/${log_group}/${run_name}/results.csv"
+echo "- Saved segmentation heatmaps: ./output"
+echo "- Visual report (enable by adding --visual_report inside the python command): ./analysis"

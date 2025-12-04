@@ -478,11 +478,11 @@ class SimpleNet(torch.nn.Module):
         image_uint8 = np.clip((image * std + mean) * 255, 0, 255).astype(np.uint8)
         image_uint8 = np.transpose(image_uint8, (1, 2, 0))
 
-        heatmap = norm_segmentations[sample_index]
+        heatmap = np.squeeze(norm_segmentations[sample_index])
         pixel_threshold = float(np.median(norm_segmentations))
         pred_mask = (heatmap > pixel_threshold).astype(float)
         gt_mask = sample.get("mask", np.zeros_like(pred_mask))
-        gt_mask = gt_mask.squeeze().cpu().numpy()
+        gt_mask = np.squeeze(gt_mask).cpu().numpy()
 
         plt.figure(figsize=(6, 6))
         plt.imshow(image_uint8)
