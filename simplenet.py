@@ -10,6 +10,7 @@ import logging
 import os
 import pickle
 from collections import OrderedDict
+from pathlib import Path
 
 import math
 import numpy as np
@@ -18,6 +19,7 @@ import torch.nn.functional as F
 import time
 import tqdm
 from torch.utils.tensorboard import SummaryWriter
+import matplotlib.pyplot as plt
 
 import backbones
 import common
@@ -351,7 +353,15 @@ class SimpleNet(torch.nn.Module):
         return features, patch_shapes, layer_features
 
     
-    def test(self, training_data, test_data, save_segmentation_images):
+    def test(
+        self,
+        training_data,
+        test_data,
+        save_segmentation_images,
+        visualize_report=False,
+        report_dir="analysis",
+        report_sample_index=0,
+    ):
 
         ckpt_path = os.path.join(self.ckpt_dir, "models.ckpt")
         if os.path.exists(ckpt_path):
@@ -377,7 +387,7 @@ class SimpleNet(torch.nn.Module):
         if save_segmentation_images:
             self.save_segmentation_images(test_data, segmentations, scores)
 
-        auroc, full_pixel_auroc, pro, inference_time = self._evaluate(
+        auroc, full_pixel_auroc, pro, inference_time, norm_segmentations, norm_scores = self._evaluate(
             test_data,
             scores,
             segmentations,
@@ -387,6 +397,17 @@ class SimpleNet(torch.nn.Module):
             inference_time,
         )
 
+        if visualize_report:
+            self._visualize_predictions(
+                test_data,
+                norm_scores,
+                norm_segmentations,
+                anomaly_labels,
+                masks_gt,
+                report_dir,
+                report_sample_index,
+            )
+
         LOGGER.info(
             f"Average inference time per image: {inference_time:.6f} seconds"
         )
@@ -394,48 +415,159 @@ class SimpleNet(torch.nn.Module):
         return auroc, full_pixel_auroc, pro, inference_time
 
     def _evaluate(self, test_data, scores, segmentations, features, labels_gt, masks_gt, inference_time=None):
-        
+
         scores = np.squeeze(np.array(scores))
-        img_min_scores = scores.min(axis=-1)
-        img_max_scores = scores.max(axis=-1)
-        scores = (scores - img_min_scores) / (img_max_scores - img_min_scores)
-        # scores = np.mean(scores, axis=0)
+        norm_scores = self._normalize_scores(scores)
 
         auroc = metrics.compute_imagewise_retrieval_metrics(
-            scores, labels_gt 
+            norm_scores, labels_gt
         )["auroc"]
 
         if len(masks_gt) > 0:
-            segmentations = np.array(segmentations)
-            min_scores = (
-                segmentations.reshape(len(segmentations), -1)
-                .min(axis=-1)
-                .reshape(-1, 1, 1, 1)
-            )
-            max_scores = (
-                segmentations.reshape(len(segmentations), -1)
-                .max(axis=-1)
-                .reshape(-1, 1, 1, 1)
-            )
-            norm_segmentations = np.zeros_like(segmentations)
-            for min_score, max_score in zip(min_scores, max_scores):
-                norm_segmentations += (segmentations - min_score) / max(max_score - min_score, 1e-2)
-            norm_segmentations = norm_segmentations / len(scores)
-
+            norm_segmentations = self._normalize_segmentations(segmentations)
 
             # Compute PRO score & PW Auroc for all images
             pixel_scores = metrics.compute_pixelwise_retrieval_metrics(
                 norm_segmentations, masks_gt)
-                # segmentations, masks_gt
             full_pixel_auroc = pixel_scores["auroc"]
 
-            pro = metrics.compute_pro(np.squeeze(np.array(masks_gt)), 
+            pro = metrics.compute_pro(np.squeeze(np.array(masks_gt)),
                                             norm_segmentations)
         else:
-            full_pixel_auroc = -1 
+            full_pixel_auroc = -1
             pro = -1
+            norm_segmentations = np.array(segmentations)
 
-        return auroc, full_pixel_auroc, pro, inference_time
+        return auroc, full_pixel_auroc, pro, inference_time, norm_segmentations, norm_scores
+
+    @staticmethod
+    def _normalize_segmentations(segmentations):
+        segmentations = np.array(segmentations)
+        min_scores = (
+            segmentations.reshape(len(segmentations), -1)
+            .min(axis=-1)
+            .reshape(-1, 1, 1, 1)
+        )
+        max_scores = (
+            segmentations.reshape(len(segmentations), -1)
+            .max(axis=-1)
+            .reshape(-1, 1, 1, 1)
+        )
+        norm_segmentations = []
+        for seg, min_score, max_score in zip(segmentations, min_scores, max_scores):
+            norm_segmentations.append((seg - min_score) / max(max_score - min_score, 1e-8))
+        return np.stack(norm_segmentations)
+
+    @staticmethod
+    def _normalize_scores(scores):
+        img_min_scores = scores.min(axis=-1)
+        img_max_scores = scores.max(axis=-1)
+        return (scores - img_min_scores) / (img_max_scores - img_min_scores + 1e-8)
+
+    def _visualize_predictions(
+        self,
+        test_loader,
+        norm_scores,
+        norm_segmentations,
+        labels_gt,
+        masks_gt,
+        report_dir,
+        report_sample_index,
+    ):
+        report_root = Path(report_dir)
+        report_root.mkdir(parents=True, exist_ok=True)
+
+        sample_index = int(report_sample_index) % len(norm_segmentations)
+        dataset = test_loader.dataset
+        sample = dataset[sample_index]
+
+        image = sample["image"].cpu().numpy()
+        mean = np.array(dataset.transform_mean).reshape(3, 1, 1)
+        std = np.array(dataset.transform_std).reshape(3, 1, 1)
+        image_uint8 = np.clip((image * std + mean) * 255, 0, 255).astype(np.uint8)
+        image_uint8 = np.transpose(image_uint8, (1, 2, 0))
+
+        heatmap = norm_segmentations[sample_index]
+        pixel_threshold = float(np.median(norm_segmentations))
+        pred_mask = (heatmap > pixel_threshold).astype(float)
+        gt_mask = sample.get("mask", np.zeros_like(pred_mask))
+        gt_mask = gt_mask.squeeze().cpu().numpy()
+
+        plt.figure(figsize=(6, 6))
+        plt.imshow(image_uint8)
+        plt.imshow(heatmap.squeeze(), cmap="jet", alpha=0.5)
+        plt.axis("off")
+        plt.tight_layout()
+        plt.savefig(report_root / "sample_heatmap_overlay.png", dpi=200)
+        plt.close()
+
+        plt.figure(figsize=(6, 6))
+        plt.imshow(image_uint8)
+        plt.imshow(gt_mask, cmap="Greens", alpha=0.35)
+        plt.imshow(pred_mask, cmap="Reds", alpha=0.35)
+        plt.axis("off")
+        plt.tight_layout()
+        plt.savefig(report_root / "prediction_vs_gt.png", dpi=200)
+        plt.close()
+
+        flat_masks = np.array(masks_gt)
+        if flat_masks.size == 0:
+            return
+
+        pixel_scores = norm_segmentations.reshape(len(norm_segmentations), -1)
+        pixel_labels = flat_masks.reshape(len(flat_masks), -1)
+        negative_pixels = (pixel_labels == 0).sum(axis=1)
+        fp_counts = np.logical_and(pixel_scores > pixel_threshold, pixel_labels == 0).sum(axis=1)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            fpr = np.divide(fp_counts, negative_pixels, where=negative_pixels > 0)
+
+        plt.figure(figsize=(7, 4))
+        plt.hist(fpr, bins=20, color="#ff7f50", edgecolor="black")
+        plt.xlabel("False positive rate per image")
+        plt.ylabel("Count")
+        plt.title("Pixel-level FPR distribution")
+        plt.tight_layout()
+        plt.savefig(report_root / "fpr_distribution.png", dpi=200)
+        plt.close()
+
+        image_level_scores = norm_scores
+        if image_level_scores.ndim > 1:
+            image_level_scores = image_level_scores.reshape(len(image_level_scores), -1).max(axis=1)
+        image_threshold = float(np.median(image_level_scores))
+        image_predictions = image_level_scores > image_threshold
+
+        false_positives = []
+        false_negatives = []
+        image_entries = test_loader.dataset.data_to_iterate
+        for idx, (pred, label) in enumerate(zip(image_predictions, labels_gt)):
+            if pred and label == 0:
+                false_positives.append(image_entries[idx][2])
+            if (not pred) and label == 1:
+                false_negatives.append(image_entries[idx][2])
+
+        plt.figure(figsize=(7, 4))
+        plt.hist(image_level_scores, bins=30, color="#4c72b0", edgecolor="black")
+        plt.axvline(image_threshold, color="red", linestyle="--", label=f"Median threshold: {image_threshold:.3f}")
+        plt.xlabel("Normalized image anomaly score")
+        plt.ylabel("Count")
+        plt.title("Image-level score distribution")
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(report_root / "image_score_distribution.png", dpi=200)
+        plt.close()
+
+        summary = {
+            "sample_index": sample_index,
+            "pixel_threshold_median": pixel_threshold,
+            "image_threshold_median": image_threshold,
+            "false_positive_images": false_positives,
+            "false_negative_images": false_negatives,
+        }
+        summary_path = report_root / "visual_report.txt"
+        with open(summary_path, "w", encoding="utf-8") as handle:
+            for key, value in summary.items():
+                handle.write(f"{key}: {value}\n")
+
         
     
     def train(self, training_data, test_data):
@@ -454,7 +586,14 @@ class SimpleNet(torch.nn.Module):
 
             self.predict(training_data, "train_")
             scores, segmentations, features, labels_gt, masks_gt, inference_time = self.predict(test_data)
-            auroc, full_pixel_auroc, anomaly_pixel_auroc, inference_time = self._evaluate(
+            (
+                auroc,
+                full_pixel_auroc,
+                anomaly_pixel_auroc,
+                inference_time,
+                _norm_segmentations,
+                _norm_scores,
+            ) = self._evaluate(
                 test_data, scores, segmentations, features, labels_gt, masks_gt, inference_time
             )
 
@@ -479,7 +618,14 @@ class SimpleNet(torch.nn.Module):
 
             # torch.cuda.empty_cache()
             scores, segmentations, features, labels_gt, masks_gt, inference_time = self.predict(test_data)
-            auroc, full_pixel_auroc, pro, inference_time = self._evaluate(
+            (
+                auroc,
+                full_pixel_auroc,
+                pro,
+                inference_time,
+                _norm_segmentations,
+                _norm_scores,
+            ) = self._evaluate(
                 test_data, scores, segmentations, features, labels_gt, masks_gt, inference_time
             )
             self.logger.logger.add_scalar("i-auroc", auroc, i_mepoch)
