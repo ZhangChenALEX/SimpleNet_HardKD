@@ -24,6 +24,7 @@ Install the requirements with your preferred environment manager (e.g., `conda`,
 - Default target: **MvTecAD**. Download from the [official site](https://www.mvtec.com/company/research/datasets/mvtec-ad/).
 - Expected layout: keep the original folder structure. By default `run.sh` assumes the dataset sits next to this repo in a sibling folder named `mvtec` (i.e., `../mvtec`).
 - To use a different location or subset of classes, edit `datapath` or `classes` in `run.sh`, or pass the corresponding CLI flags to `main.py`.
+  - If you want a quick per-image visual report (heatmap overlay, GT comparison, FPR histogram, median-threshold FP/FN list), add the `--visual_report` flag to the testing command. Use `--visual_report_dir` to pick an output folder (default: `analysis`) and `--visual_report_index` to choose which test sample to visualize (0-based index).
 
 ## How to Run
 The project ships with a convenience script that trains and then tests in one go.
@@ -43,6 +44,16 @@ You can also invoke the CLI directly for custom runs, e.g.:
 python3 main.py --dataset mvtec --datapath ../mvtec --meta_epochs 40
 python3 main.py --dataset mvtec --datapath ../mvtec --test --save_segmentation_images
 ```
+
+For **test only**, run:
+
+```bash
+bash test.sh [datapath] [results_dir] [run_name]
+```
+
+- Defaults: `datapath=../mvtec`, `results_dir=results`, `run_name=run`, `log_project=MVTecAD_Results`, `log_group=simplenet_mvtec`.
+- The script expects pretrained weights at `results/<log_project>/<log_group>/<run_name>/models/0/mvtec/models.ckpt` and will abort with a clear error if the file is missing.
+- Outputs remain unchanged: metrics CSV under `results/<log_project>/<log_group>/<run_name>/results.csv`, segmentation heatmaps under `./output/`, and optional visual reports under `./analysis/` (when `--visual_report` is added to the python command inside the script).
 
 ## End-to-End Workflow (English)
 1. **Prepare data**: place the MvTecAD dataset at `../mvtec` or point `datapath` elsewhere.
