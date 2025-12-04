@@ -1,1 +1,17 @@
 __pycache__/*
+# output images
+output/
+
+# MVTec result folders 
+results/
+
+# slurm logs
+slurm-*.out
+slurm-*.err
+
+# tensorboard logs
+events.out.tfevents.*
+
+# python cache
+__pycache__/
+*.pyc
